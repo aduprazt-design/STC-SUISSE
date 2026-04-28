@@ -43,11 +43,11 @@ tr:last-child td { border-bottom: none; }
 </head>
 <body>
 <div class="wrap">
-  <h1>Calculateur STC — Congés payés Suisse</h1>
+  <h1>Calculateur STC &#8212; Cong&#233;s pay&#233;s Suisse</h1>
 
   <p class="sec">Contrat</p>
   <div class="row2">
-    <div><label for="entree">Date d'entrée</label><input type="date" id="entree"></div>
+    <div><label for="entree">Date d&#39;entr&#233;e</label><input type="date" id="entree"></div>
     <div><label for="sortie">Date de sortie</label><input type="date" id="sortie"></div>
   </div>
 
@@ -65,9 +65,317 @@ Mars 2026
   </div>
 
   <button class="btn-calc" id="btnCalc" type="button">Calculer le STC</button>
-
   <div id="result"></div>
 </div>
-<script src="stc_cp_suisse.js"></script>
+
+<script>
+var MOIS_FR = {
+  'janvier':0,'fevrier':1,'mars':2,'avril':3,'mai':4,'juin':5,
+  'juillet':6,'aout':7,'septembre':8,'octobre':9,'novembre':10,'decembre':11
+};
+var REPORT_MAX = 5;
+
+function normMois(s) {
+  return (s||'').toLowerCase()
+    .replace(/\u00e9|\u00e8|\u00ea/g,'e')
+    .replace(/\u00fb|\u00f9/g,'u')
+    .replace(/\u00e2|\u00e0/g,'a')
+    .trim();
+}
+
+function fmt(n) {
+  if (n === undefined || n === null || isNaN(n)) return '&mdash;';
+  var r = Math.ceil(n * 2) / 2;
+  return (r % 1 === 0 ? r.toFixed(0) : r.toFixed(1)) + ' j';
+}
+function fmtN(n) {
+  if (isNaN(n)) return '&mdash;';
+  var r = Math.ceil(n * 2) / 2;
+  return r % 1 === 0 ? r.toFixed(0) : r.toFixed(1);
+}
+
+function makePalierRow() {
+  var row = document.createElement('div');
+  row.className = 'palier-row';
+
+  var col1 = document.createElement('div');
+  var lbl1 = document.createElement('label');
+  lbl1.textContent = 'A partir de';
+  var inp1 = document.createElement('input');
+  inp1.type = 'date';
+  inp1.className = 'p-date';
+  col1.appendChild(lbl1);
+  col1.appendChild(inp1);
+
+  var col2 = document.createElement('div');
+  var lbl2 = document.createElement('label');
+  lbl2.textContent = 'Jours / an';
+  var inp2 = document.createElement('input');
+  inp2.type = 'number';
+  inp2.className = 'p-jours';
+  inp2.min = '1';
+  inp2.max = '60';
+  inp2.value = '25';
+  col2.appendChild(lbl2);
+  col2.appendChild(inp2);
+
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-del';
+  btn.textContent = 'x';
+  btn.addEventListener('click', function() {
+    var rows = document.querySelectorAll('.palier-row');
+    if (rows.length > 1) row.parentNode.removeChild(row);
+  });
+
+  row.appendChild(col1);
+  row.appendChild(col2);
+  row.appendChild(btn);
+  return row;
+}
+
+function addPalier() {
+  document.getElementById('paliers').appendChild(makePalierRow());
+}
+
+function getCPForDate(paliers, date) {
+  var cp = paliers[0].jours;
+  for (var i = 0; i < paliers.length; i++) {
+    if (date >= paliers[i].date) cp = paliers[i].jours;
+  }
+  return cp;
+}
+
+function getMoisAnnee(str) {
+  var n = normMois(str);
+  var keys = Object.keys(MOIS_FR);
+  for (var i = 0; i < keys.length; i++) {
+    var re = new RegExp(keys[i] + '\\s+(\\d{4})');
+    var match = n.match(re);
+    if (match) return { mois: MOIS_FR[keys[i]], annee: parseInt(match[1]) };
+  }
+  return null;
+}
+
+function periodeInRange(periodeStr, entree, sortie) {
+  var parts = periodeStr.split(/\s*[-]\s*/);
+  var dates = [];
+  for (var i = 0; i < parts.length; i++) {
+    var d = getMoisAnnee(parts[i]);
+    if (d) dates.push(d);
+  }
+  if (!dates.length) return false;
+  for (var j = 0; j < dates.length; j++) {
+    var t = new Date(dates[j].annee, dates[j].mois, 1);
+    var eStart = new Date(entree.getFullYear(), entree.getMonth(), 1);
+    var eEnd = new Date(sortie.getFullYear(), sortie.getMonth(), 1);
+    if (t >= eStart && t <= eEnd) return true;
+  }
+  return false;
+}
+
+function getPeriodeAnnee(periodeStr) {
+  var parts = periodeStr.split(/\s*[-]\s*/);
+  var annees = [];
+  for (var i = 0; i < parts.length; i++) {
+    var d = getMoisAnnee(parts[i]);
+    if (d && annees.indexOf(d.annee) === -1) annees.push(d.annee);
+  }
+  return annees;
+}
+
+function parseExport(raw, entree, sortie) {
+  var lines = raw.split('\n');
+  var trimmed = [];
+  for (var i = 0; i < lines.length; i++) {
+    var l = lines[i].trim();
+    if (l.length > 0) trimmed.push(l);
+  }
+  var byAnnee = {};
+  var ignored = [];
+  var idx = 0;
+  while (idx < trimmed.length) {
+    var line = trimmed[idx];
+    var m = line.match(/^([\d.,]+)\s*jour/i);
+    if (m && idx + 1 < trimmed.length) {
+      var nb = parseFloat(m[1].replace(',', '.'));
+      var periodeStr = trimmed[idx + 1];
+      var typeM = line.match(/\(([^)]+)\)/);
+      var type = typeM ? typeM[1] : '';
+      var isCP = /cp/i.test(type);
+      if (isCP && nb > 0) {
+        if (periodeInRange(periodeStr, entree, sortie)) {
+          var annees = getPeriodeAnnee(periodeStr);
+          for (var a = 0; a < annees.length; a++) {
+            var yr = annees[a];
+            if (!byAnnee[yr]) byAnnee[yr] = [];
+            byAnnee[yr].push({ nb: nb / annees.length, type: type, periode: periodeStr.trim() });
+          }
+        } else {
+          ignored.push({ nb: nb, type: type, periode: periodeStr.trim() });
+        }
+      }
+      idx += 2;
+    } else {
+      idx++;
+    }
+  }
+  return { byAnnee: byAnnee, ignored: ignored };
+}
+
+function calculer() {
+  var entreeVal = document.getElementById('entree').value;
+  var sortieVal = document.getElementById('sortie').value;
+  var res = document.getElementById('result');
+
+  if (!entreeVal || !sortieVal) {
+    res.innerHTML = '<div class="err">Merci de renseigner la date d\'entree et de sortie.</div>';
+    return;
+  }
+  var entree = new Date(entreeVal);
+  var sortie = new Date(sortieVal);
+  if (sortie < entree) {
+    res.innerHTML = '<div class="err">Date de sortie avant date d\'entree.</div>';
+    return;
+  }
+
+  var palierRows = document.querySelectorAll('.palier-row');
+  var paliers = [];
+  for (var i = 0; i < palierRows.length; i++) {
+    var dVal = palierRows[i].querySelector('.p-date').value;
+    var jVal = parseFloat(palierRows[i].querySelector('.p-jours').value);
+    if (!dVal || isNaN(jVal)) {
+      res.innerHTML = '<div class="err">Merci de remplir tous les paliers.</div>';
+      return;
+    }
+    paliers.push({ date: new Date(dVal), jours: jVal });
+  }
+  paliers.sort(function(a, b) { return a.date - b.date; });
+
+  var raw = document.getElementById('absences').value;
+  var parsed = parseExport(raw, entree, sortie);
+  var byAnnee = parsed.byAnnee;
+  var ignored = parsed.ignored;
+
+  var anneeDebut = entree.getFullYear();
+  var anneeFin = sortie.getFullYear();
+  var annees = [];
+  for (var a = anneeDebut; a <= anneeFin; a++) annees.push(a);
+
+  var reportPrecedent = 0;
+  var lignes = [];
+
+  for (var ai = 0; ai < annees.length; ai++) {
+    var annee = annees[ai];
+    var debutAnnee = new Date(annee, 0, 1);
+    var finAnnee = new Date(annee, 11, 31);
+    var debutPeriode = entree > debutAnnee ? entree : debutAnnee;
+    var finPeriode = sortie < finAnnee ? sortie : finAnnee;
+
+    var cpAcquis = 0;
+    var d = new Date(debutPeriode.getFullYear(), debutPeriode.getMonth(), 1);
+    var fEnd = new Date(finPeriode.getFullYear(), finPeriode.getMonth(), 1);
+    var nbMois = 0;
+    while (d <= fEnd) {
+      cpAcquis += getCPForDate(paliers, d) / 12;
+      nbMois++;
+      d.setMonth(d.getMonth() + 1);
+    }
+
+    var cpAcquisArrondi = Math.ceil(cpAcquis * 2) / 2;
+    var droitTotal = cpAcquisArrondi + reportPrecedent;
+    var prisList = byAnnee[annee] || [];
+    var totalPrisRaw = 0;
+    for (var pi = 0; pi < prisList.length; pi++) totalPrisRaw += prisList[pi].nb;
+    var totalPris = Math.round(totalPrisRaw * 2) / 2;
+    var solde = droitTotal - totalPris;
+    var estDerniere = annee === anneeFin;
+    var reportVersAnnee = 0, perdu = 0, soldeSTC = 0;
+
+    if (estDerniere) {
+      soldeSTC = solde;
+    } else {
+      if (solde > REPORT_MAX) {
+        reportVersAnnee = REPORT_MAX;
+        perdu = Math.round((solde - REPORT_MAX) * 2) / 2;
+      } else {
+        reportVersAnnee = solde;
+      }
+    }
+
+    lignes.push({
+      annee: annee, nbMois: nbMois, cpAcquisArrondi: cpAcquisArrondi,
+      reportPrecedent: reportPrecedent, droitTotal: droitTotal,
+      totalPrisArrondi: totalPris, solde: solde,
+      reportVersAnnee: reportVersAnnee, perdu: perdu,
+      soldeSTC: soldeSTC, estDerniere: estDerniere
+    });
+    reportPrecedent = reportVersAnnee;
+  }
+
+  var totalAcquis = 0, totalPrisAll = 0;
+  for (var li = 0; li < lignes.length; li++) {
+    totalAcquis += lignes[li].cpAcquisArrondi;
+    totalPrisAll += lignes[li].totalPrisArrondi;
+  }
+  var soldeFinal = lignes[lignes.length - 1].soldeSTC;
+  var cls = soldeFinal > 5 ? 'ok' : soldeFinal > 0 ? 'warn' : soldeFinal < 0 ? 'danger' : '';
+
+  var html = '<div class="metrics">'
+    + '<div class="metric"><p class="metric-label">Total acquis</p><p class="metric-val">' + fmtN(totalAcquis) + ' j</p></div>'
+    + '<div class="metric"><p class="metric-label">Total pris</p><p class="metric-val">' + fmtN(totalPrisAll) + ' j</p></div>'
+    + '<div class="metric"><p class="metric-label">Solde STC</p><p class="metric-val ' + cls + '">' + fmtN(soldeFinal) + ' j</p></div>'
+    + '</div>';
+
+  html += '<div class="tbl-wrap"><table>'
+    + '<thead><tr>'
+    + '<th>Annee</th><th>Acquis</th><th>Report N-1</th><th>Total droit</th>'
+    + '<th>CP pris</th><th>Solde</th><th>Report N+1</th><th>Perdu</th>'
+    + '</tr></thead><tbody>';
+
+  for (var li2 = 0; li2 < lignes.length; li2++) {
+    var l = lignes[li2];
+    var sClass = l.solde < 0 ? 'danger' : '';
+    var perduCell = l.perdu > 0 ? '<span class="danger">' + fmt(l.perdu) + '</span>' : '&mdash;';
+    var reportCell = l.estDerniere
+      ? '<span style="color:#aaa">STC</span>'
+      : (l.reportVersAnnee !== 0 ? '<span class="' + (l.reportVersAnnee < 0 ? 'danger' : '') + '">' + fmt(l.reportVersAnnee) + '</span>' : '&mdash;');
+    var soldeCell = l.estDerniere
+      ? '<strong class="' + (l.soldeSTC > 0 ? 'ok' : l.soldeSTC < 0 ? 'danger' : '') + '">' + fmt(l.soldeSTC) + '</strong>'
+      : '<span class="' + sClass + '">' + fmt(l.solde) + '</span>';
+    var reportPrecCell = l.reportPrecedent !== 0
+      ? '<span class="' + (l.reportPrecedent < 0 ? 'danger' : '') + '">' + fmt(l.reportPrecedent) + '</span>'
+      : '&mdash;';
+
+    html += '<tr>'
+      + '<td>' + l.annee + '</td>'
+      + '<td>' + fmt(l.cpAcquisArrondi) + '<span class="sub">' + l.nbMois + ' mois</span></td>'
+      + '<td>' + reportPrecCell + '</td>'
+      + '<td>' + fmt(l.droitTotal) + '</td>'
+      + '<td>' + (l.totalPrisArrondi > 0 ? fmt(l.totalPrisArrondi) : '&mdash;') + '</td>'
+      + '<td>' + soldeCell + '</td>'
+      + '<td>' + reportCell + '</td>'
+      + '<td>' + perduCell + '</td>'
+      + '</tr>';
+  }
+  html += '</tbody></table></div>';
+
+  if (ignored.length > 0) {
+    html += '<div class="info">CP hors periode de contrat ignores :<br>';
+    for (var ig = 0; ig < ignored.length; ig++) {
+      html += '- ' + ignored[ig].periode + ' : ' + fmt(ignored[ig].nb) + ' (' + ignored[ig].type + ')<br>';
+    }
+    html += '</div>';
+  }
+
+  res.innerHTML = html;
+}
+
+window.addEventListener('load', function() {
+  addPalier();
+  document.getElementById('btnAdd').addEventListener('click', addPalier);
+  document.getElementById('btnCalc').addEventListener('click', calculer);
+});
+</script>
 </body>
 </html>
